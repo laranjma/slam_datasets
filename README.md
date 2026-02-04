@@ -13,11 +13,11 @@ benchmarking scripts, or dataset conversion pipelines.
 
 ## Features
 
--   CARMEN log file parsing (`.clf`, `.log`, optionally `.gz`)
--   Simple Python dataclasses for poses and laser scans
--   Iterator-based API for memory-efficient processing
--   ROS-agnostic (usable in pure Python environments)
--   Compatible with ROS2 dataset players or converters
+- CARMEN log file parsing (`.clf`, `.log`, optionally `.gz`)
+- Simple Python dataclasses for poses and laser scans
+- Iterator-based API for memory-efficient processing
+- ROS-agnostic (usable in pure Python environments)
+- Compatible with ROS2 dataset players or converters
 
 ------------------------------------------------------------------------
 
@@ -27,9 +27,9 @@ benchmarking scripts, or dataset conversion pipelines.
 
 Currently implemented:
 
--   `FLASER` / `RLASER` records\
--   Timestamped 2D laser scans\
--   Basic pose extraction when available
+- `FLASER` / `RLASER` records
+- Timestamped 2D laser scans
+- Basic pose extraction when available
 
 Angle metadata is inferred from the number of beams assuming a 180° FOV
 when not explicitly specified in the log.
@@ -81,8 +81,8 @@ pip install -e .
 
 Defines reusable dataclasses:
 
--   `Pose2D`
--   `LaserScan2DRecord`
+- `Pose2D`
+- `LaserScan2DRecord`
 
 These are simple containers to avoid framework lock-in.
 
@@ -96,9 +96,9 @@ Main entry point for CARMEN logs.
 
 Responsibilities:
 
--   Open plain or gzipped CARMEN logs\
--   Parse laser records\
--   Yield `LaserScan2DRecord` instances
+- Open plain or gzipped CARMEN logs
+- Parse laser records
+- Yield `LaserScan2DRecord` instances
 
 ------------------------------------------------------------------------
 
@@ -125,11 +125,11 @@ for scan in reader.iter_scans():
 
 ## Example use cases
 
--   Offline SLAM benchmarking\
--   Converting CARMEN → ROS bag\
--   Dataset validation and inspection\
--   Teaching and prototyping SLAM algorithms\
--   Feeding custom SLAM front-ends/back-ends
+- Offline SLAM benchmarking
+- Converting CARMEN → ROS bag
+- Dataset validation and inspection
+- Teaching and prototyping SLAM algorithms
+- Feeding custom SLAM front-ends/back-ends
 
 ------------------------------------------------------------------------
 
@@ -152,7 +152,7 @@ colcon build --packages-select slam_datasets
 colcon test --packages-select slam_datasets
 ```
 
-Lint tests may include:
+Lint tests includes:
 
 -   flake8\
 -   pep257
