@@ -28,6 +28,7 @@ benchmarking scripts, or dataset conversion pipelines.
 Currently implemented:
 
 - `FLASER` / `RLASER` records
+- `ODOM` records
 - Timestamped 2D laser scans
 - Basic pose extraction when available
 
@@ -83,6 +84,7 @@ Defines reusable dataclasses:
 
 - `Pose2D`
 - `LaserScan2DRecord`
+- `Odometry2DRecord`
 
 These are simple containers to avoid framework lock-in.
 
@@ -97,8 +99,9 @@ Main entry point for CARMEN logs.
 Responsibilities:
 
 - Open plain or gzipped CARMEN logs
-- Parse laser records
-- Yield `LaserScan2DRecord` instances
+- Parse mixed CARMEN records
+- Yield mixed records via `iter_records()`
+- Yield scan-only records via `iter_scans()`
 
 ------------------------------------------------------------------------
 

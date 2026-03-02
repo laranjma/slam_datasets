@@ -3,7 +3,7 @@ import gzip
 from pathlib import Path
 from typing import Iterator, Optional, TextIO, Union
 
-from slam_datasets.records import LaserScan2DRecord, Pose2D
+from slam_datasets.records import CarmenRecord, LaserScan2DRecord, Odometry2DRecord, Pose2D
 
 def _open_text(path: Union[str, Path]) -> TextIO:
     p = Path(path)
@@ -22,24 +22,33 @@ class CarmenLogReader:
         self._scan_frame_id = scan_frame_id
         self._prefer_msg_ts = prefer_message_timestamp
 
-    # Iterator over the CARMEN log lines and yield a LaserScan2DRecord sequentially.
-    def iter_scans(self) -> Iterator[LaserScan2DRecord]:
+    # Iterator over the CARMEN log lines and yield records sequentially.
+    def iter_records(self) -> Iterator[CarmenRecord]:
         with _open_text(self._path) as f:
             for line in f:
-                if not line or line[0] == "#":
-                    continue
-
-                if line.startswith("ROBOTLASER"):
-                    rec = self._parse_robotlaser(line)
-                elif line.startswith("FLASER "):
-                    rec = self._parse_flaser(line)
-                elif line.startswith("RLASER "):
-                    rec = self._parse_rlaser(line)
-                else:
-                    rec = None
-
+                rec = self._parse_line(line)
                 if rec is not None:
                     yield rec
+
+    # Iterator over the CARMEN log lines and yield only laser scans sequentially.
+    def iter_scans(self) -> Iterator[LaserScan2DRecord]:
+        for rec in self.iter_records():
+            if isinstance(rec, LaserScan2DRecord):
+                yield rec
+
+    def _parse_line(self, line: str) -> Optional[CarmenRecord]:
+        if not line or line[0] == "#":
+            return None
+
+        if line.startswith("ROBOTLASER"):
+            return self._parse_robotlaser(line)
+        if line.startswith("FLASER "):
+            return self._parse_flaser(line)
+        if line.startswith("RLASER "):
+            return self._parse_rlaser(line)
+        if line.startswith("ODOM "):
+            return self._parse_odom(line)
+        return None
 
     def _parse_robotlaser(self, line: str) -> Optional[LaserScan2DRecord]:
         tok = line.strip().split()
@@ -113,6 +122,8 @@ class CarmenLogReader:
 
     def _parse_flaser(self, line: str) -> Optional[LaserScan2DRecord]:
         """
+        Parse a FLASER record from a CARMEN log line.
+
         Format (common): FLASER <n> <r0..r(n-1)> <x> <y> <theta> <odom_x> <odom_y> <odom_theta> <timestamp> <host> <logger_ts>
         Some variants have extra fields; we parse conservatively from the end.
         """
@@ -123,14 +134,19 @@ class CarmenLogReader:
             n = int(tok[idx]); idx += 1
             ranges = list(map(float, tok[idx:idx+n])); idx += n
 
-            # Next 3 are laser pose in world (or robot pose depending on logger); treat as robot_pose estimate
+            # Next 3 are usually laser pose in world.
             x = float(tok[idx]); y = float(tok[idx+1]); th = float(tok[idx+2])
             idx += 3
 
-            # Many logs include odom pose next (x y th)
-            # If present, keep but don't require.
-            robot_pose = Pose2D(x, y, th)
-            laser_pose = None
+            # Many logs include odom pose next (x y th).
+            # Keep laser and robot poses separately when available.
+            laser_pose = Pose2D(x, y, th)
+            robot_pose = None
+            if (len(tok) - idx) >= 6:
+                robot_pose = Pose2D(float(tok[idx]), float(tok[idx + 1]), float(tok[idx + 2]))
+                idx += 3
+            elif (len(tok) - idx) >= 3:
+                robot_pose = Pose2D(x, y, th)
 
             # Timestamp is at the end: "... ipc_timestamp ipc_hostname logger_timestamp"
             # The line header says: message_name [contents] ipc_timestamp ipc_hostname logger_timestamp
@@ -161,3 +177,28 @@ class CarmenLogReader:
     def _parse_rlaser(self, line: str) -> Optional[LaserScan2DRecord]:
         # Usually same structure as FLASER
         return self._parse_flaser(line)
+
+    def _parse_odom(self, line: str) -> Optional[Odometry2DRecord]:
+        # Common format: ODOM x y theta tv rv accel <timestamp> <host> <logger_timestamp>
+        tok = line.strip().split()
+        try:
+            if len(tok) < 8:
+                return None
+
+            x = float(tok[1])
+            y = float(tok[2])
+            yaw = float(tok[3])
+            tv = float(tok[4]) if len(tok) > 4 else None
+            rv = float(tok[5]) if len(tok) > 5 else None
+            accel = float(tok[6]) if len(tok) > 6 else None
+            stamp = float(tok[-3]) if len(tok) >= 10 else float(tok[-1])
+
+            return Odometry2DRecord(
+                stamp=stamp,
+                pose=Pose2D(x=x, y=y, yaw=yaw),
+                tv=tv,
+                rv=rv,
+                accel=accel,
+            )
+        except Exception:
+            return None

@@ -1,12 +1,22 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Union
 
 @dataclass(frozen=True)
 class Pose2D:
     x: float
     y: float
     yaw: float
+
+
+@dataclass(frozen=True)
+class Odometry2DRecord:
+    stamp: float          # seconds
+    pose: Pose2D
+    tv: Optional[float] = None
+    rv: Optional[float] = None
+    accel: Optional[float] = None
+
 
 @dataclass(frozen=True)
 class LaserScan2DRecord:
@@ -22,3 +32,5 @@ class LaserScan2DRecord:
     tv: Optional[float] = None
     rv: Optional[float] = None
 
+
+CarmenRecord = Union[LaserScan2DRecord, Odometry2DRecord]
