@@ -16,6 +16,8 @@ benchmarking scripts, or dataset conversion pipelines.
 - CARMEN log file parsing (`.clf`, `.log`, optionally `.gz`)
 - Simple Python dataclasses for poses and laser scans
 - Iterator-based API for memory-efficient processing
+- Occupancy-grid map generation from CARMEN scans
+- Trajectory overlay from raw odometry and `relations.log` constraints
 - ROS-agnostic (usable in pure Python environments)
 - Compatible with ROS2 dataset players or converters
 
@@ -68,7 +70,8 @@ pip install -e .
     │   ├── carmen/
     │   │   └── carmen_reader.py
     │   └── scripts/
-    │       └── validate_carmen_log.py
+    │       ├── validate_carmen_log.py
+    │       └── generate_occupancy_map.py
     │
     ├── test/
     ├── package.xml
@@ -120,7 +123,7 @@ for scan in reader.iter_scans():
         scan.stamp,
         len(scan.ranges),
         scan.angle_min,
-        scan.angle_max
+        scan.angle_increment
     )
 ```
 
@@ -143,6 +146,45 @@ python -m slam_datasets.scripts.validate_carmen_log <path_to_log>
 ```
 
 Helps verify format correctness and scan counts.
+
+------------------------------------------------------------------------
+
+## Occupancy map script
+
+Generate an occupancy-grid map from CARMEN laser scans and overlay:
+
+- odometry trajectory from the raw log
+- ground-truth trajectory reconstructed from `relations.log`
+
+Python module usage:
+
+```bash
+python3 -m slam_datasets.scripts.generate_occupancy_map \
+  --raw-log /path/to/intel_research_lab_raw.log \
+  --relations-log /path/to/relations.log \
+  --output /tmp/intel_map.png
+```
+
+Console entry point usage:
+
+```bash
+generate_occupancy_map \
+  --raw-log /path/to/intel_research_lab_raw.log \
+  --relations-log /path/to/relations.log \
+  --output /tmp/intel_map.png
+```
+
+Main options:
+
+- `--resolution` grid resolution in meters (default: `0.05`)
+- `--max-range` max lidar range used in mapping (default: `12.0`)
+- `--beam-step` use every Nth laser beam (default: `2`)
+- `--scan-step` use every Nth selected scan (default: `1`)
+- `--max-scans` cap number of scans (`0` means no cap)
+- `--all-scans` use all raw scans even when relations are provided
+
+If `--relations-log` is omitted, the map is generated with odometry
+trajectory only.
 
 ------------------------------------------------------------------------
 

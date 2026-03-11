@@ -152,6 +152,7 @@ class CarmenLogReader:
             # The line header says: message_name [contents] ipc_timestamp ipc_hostname logger_timestamp
             stamp = float(tok[-3])
 
+            # FIXME: set this as input params
             # FLASER does not embed angle metadata; we need defaults per dataset.
             # Typical SICK LMS: 180 deg FOV with 0.5 deg or 1 deg resolution.
             # We'll make these configurable later; for now infer from n assuming 180°.

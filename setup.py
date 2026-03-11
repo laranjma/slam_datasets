@@ -24,6 +24,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'generate_occupancy_map = slam_datasets.scripts.generate_occupancy_map:main',
         ],
     },
 )
