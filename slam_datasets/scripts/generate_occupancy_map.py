@@ -5,7 +5,7 @@ import argparse
 import heapq
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
 
@@ -40,7 +40,6 @@ class RelationEdge:
     dtheta: float
 
 
-
 @dataclass(frozen=True)
 class ScanSample:
     """Scan sample representing a 2D laser scan at a specific timestamp and 2D pose.
@@ -59,6 +58,19 @@ class ScanSample:
     angle_increment: float
     range_min: float
     ranges: np.ndarray
+
+@dataclass(frozen=True)
+class GraphNode:
+    """Graph node containing its timestamp, corresponding 2D pose and laser scan.
+
+    Attributes:
+        stamp: timestamp of the node
+        pose: 2D pose associated with the timestamp
+        scan: laser scan associated with the timestamp
+    """
+    stamp: float
+    pose: Pose2D
+    scan: ScanSample
 
 
 def normalize_angle(angle: float) -> float:
@@ -159,6 +171,7 @@ def parse_relations(relations_path: Path) -> List[RelationEdge]:
 
 def build_ground_truth_pose_map(
     edges: Sequence[RelationEdge],
+    stamps: Sequence[float],
 ) -> Tuple[Dict[float, Pose2D], Dict[float, int]]:
     """Compute the robot path using a Dijkstra-like search over the relation edges.
 
@@ -172,16 +185,16 @@ def build_ground_truth_pose_map(
         edges: List of relation edges representing pose constraints.
 
     Returns:
-        Tuple of two dictionaries:
-        - The 2D pose of the related node in local frame
-        - The related node ID
+        Tuple of two dictionaries mapping timestamps to:
+        - the corresponding 2D poses from the segment origin
+        - the corresponding trajectory segment ID
     """
     if not edges:
         return {}, {}
 
     # Sorte edge stamps and initialize adjacency list
     # TODO: reuse 'relation_stamps' calculated in main() instead of 'stamps'
-    stamps = sorted({edge.src_stamp for edge in edges} | {edge.dst_stamp for edge in edges})
+    #stamps = sorted({edge.src_stamp for edge in edges} | {edge.dst_stamp for edge in edges})
     stamp_index = {stamp: idx for idx, stamp in enumerate(stamps)}
     # Adjacency list: stamp -> List of (neighbor_stamp, relative_pose, step_cost)
     adjacency: Dict[float, List[Tuple[float, Pose2D, int]]] = {stamp: [] for stamp in stamps}
@@ -198,33 +211,34 @@ def build_ground_truth_pose_map(
 
     # Run Dijkstra-like search to find best-cost (i.e. the most sequentially connected path)
     best_cost: Dict[float, int] = {}   # best known path cost (as a time index) for each timestamp
-    pose_map: Dict[float, Pose2D] = {} # the computed relative pose for each timestamp
-    node_id_map: Dict[float, int] = {} # relates timestamps to a node ID
-    node_id = 0                        # current node 
+    pose_map: Dict[float, Pose2D] = {} # the computed pose for each timestamp
+    segment_id_map: Dict[float, int] = {} # relates timestamps to a trajectory segment ID
+    segment_id = 0                        # current segment ID
     # First node is the first timestamp ('stamps" is ordered)
-    for start in stamps:  
+    for origin_st in stamps:
         # jump if node already visited
-        if start in best_cost:
+        if origin_st in best_cost:
             continue
 
-        # Start new search from new unvisited node (cost and dist to itself is 0)
-        node_id += 1
-        best_cost[start] = 0
-        pose_map[start] = Pose2D(x=0.0, y=0.0, yaw=0.0)
-        node_id_map[start] = node_id
-        queue: List[Tuple[int, float]] = [(0, start)]
+        # Start new search, a new trajectory segment,
+        # from new unvisited node (cost and dist to itself is 0)
+        segment_id += 1
+        best_cost[origin_st] = 0
+        pose_map[origin_st] = Pose2D(x=0.0, y=0.0, yaw=0.0)
+        segment_id_map[origin_st] = segment_id
+        queue: List[Tuple[int, float]] = [(0, origin_st)]
         # Browse queue of nodes to visit
         while queue:
             # Take the lowest cost node in the queue.
             # Ignore it if a best cost is known for the node
-            cost, stamp = heapq.heappop(queue) # take lowest cost
-            if cost > best_cost.get(stamp, math.inf):
+            cost, node_st = heapq.heappop(queue) # take lowest cost
+            if cost > best_cost.get(node_st, math.inf):
                 continue
 
-            # Expande neighbors for current node (stamp)
-            node_id_map[stamp] = node_id
-            base_pose = pose_map[stamp]
-            for nxt_stamp, rel_delta, edge_cost in adjacency[stamp]:
+            # Expande neighbors for current segment origin
+            segment_id_map[node_st] = segment_id
+            base_pose = pose_map[node_st]
+            for nxt_stamp, rel_delta, edge_cost in adjacency[node_st]:
                 # Ignore neighbor if a better cost (better path) is already known
                 new_cost = cost + edge_cost
                 if new_cost >= best_cost.get(nxt_stamp, math.inf):
@@ -232,9 +246,9 @@ def build_ground_truth_pose_map(
                 # Update best cost and pose for the neighbor. Add it to the queue
                 best_cost[nxt_stamp] = new_cost
                 pose_map[nxt_stamp] = compose_pose(base_pose, rel_delta)
-                node_id_map[nxt_stamp] = node_id
+                segment_id_map[nxt_stamp] = segment_id
                 heapq.heappush(queue, (new_cost, nxt_stamp))
-    return pose_map, node_id_map
+    return pose_map, segment_id_map
 
 
 def load_scans(raw_log_path: Path) -> List[ScanSample]:
@@ -456,7 +470,7 @@ def build_occupancy_grid(
         prob_free: free-cell inverse-model probability
         log_odds_clip: saturation value for log-odds updates
         padding: extra map padding in meters around trajectory and endpoints
-    
+
     Returns:
         occupancy_probability: 2D array of occupancy probabilities in [0, 1]
         extent: (min_x, max_x, min_y, max_y) bounds of the map in world coordinates
@@ -508,6 +522,111 @@ def build_occupancy_grid(
     occupancy_probability = 1.0 / (1.0 + np.exp(-log_odds))
     return occupancy_probability, (min_x, max_x, min_y, max_y)
 
+def build_occupancy_grid_map(
+    pose_graph_map: Sequence[GraphNode],
+    resolution: float,
+    max_range: float,
+    beam_step: int,
+    prob_occ: float,
+    prob_free: float,
+    log_odds_clip: float,
+    padding: float,
+) -> Tuple[np.ndarray, Tuple[float, float, float, float]]:
+    """Build an occupancy grid map from a sequence of graph nodes.
+
+    This function extracts the scans from the graph nodes and builds an occupancy grid map
+    using the build_occupancy_grid() function.
+
+    Args:
+        pose_graph_map: sequence of graph nodes containing poses and scans
+        resolution: grid resolution in meters
+        max_range: maximum lidar range used for mapping in meters
+        beam_step: use every Nth beam for mapping (1 = use all beams)
+        prob_occ: occupied-cell inverse-model probability
+        prob_free: free-cell inverse-model probability
+        log_odds_clip: saturation value for log-odds updates
+        padding: extra map padding in meters around trajectory and endpoints
+    
+    Returns:
+        occupancy_probability: 2D array of occupancy probabilities in [0, 1]
+        extent: (min_x, max_x, min_y, max_y) bounds of the map in world coordinates
+    """
+    #scans = [node.scan, node.scan.pose = node.pose for node in pose_graph_map]
+    scans = [replace(node.scan, pose=node.pose) for node in pose_graph_map]
+
+    return build_occupancy_grid(
+        scans,
+        resolution=resolution,
+        max_range=max_range,
+        beam_step=beam_step,
+        prob_occ=prob_occ,
+        prob_free=prob_free,
+        log_odds_clip=log_odds_clip,
+        padding=padding
+    )
+
+def extract_largest_trajectory(
+    pose_map: Dict[float, Pose2D],
+    segment_id_map: Dict[float, int],
+) -> Dict[float, Pose2D]:
+    """Extract the largest trajectory segment from the computed pose map.
+
+    Args:
+        pose_map: A dictionary mapping timestamps to their corresponding 2D poses.
+        segment_id_map: A dictionary mapping timestamps to their corresponding trajectory segment IDs.
+
+    Returns:
+        A dictionary mapping timestamps to their corresponding 2D poses for the largest trajectory segment.
+    """
+    # Count the number of poses in each segment
+    segment_sizes = {}
+    for stamp, segment_id in segment_id_map.items():
+        segment_sizes[segment_id] = segment_sizes.get(segment_id, 0) + 1
+
+    # Find the largest segment
+    largest_segment_id = max(segment_sizes, key=segment_sizes.get)
+
+    # Extract poses belonging to the largest segment
+    largest_trajectory = {
+        stamp: pose for stamp, pose in pose_map.items()
+        if segment_id_map.get(stamp) == largest_segment_id
+    }
+
+    return largest_trajectory
+
+def build_pose_graph_map(pose_map: Dict[float, Pose2D],
+                         scans: Sequence[ScanSample],
+                         ordered_stamps: Sequence[float]) -> Sequence[GraphNode]:
+    """Build a pose graph map from a set of poses and laserscans.
+
+    Args:
+        pose_map: A dictionary mapping timestamps to their corresponding 2D poses.
+        scans: A sequence of ScanSample objects representing the laser scans and
+               their associated odom poses.
+        relation_stamps: A sequence of timestamps that appear in the relations (if any).
+    """
+    if not pose_map or not scans or not ordered_stamps:
+        return []
+
+    scan_by_stamp = {scan.stamp: scan for scan in scans}
+
+    pose_graph_nodes: List[GraphNode] = []
+    for stamp in ordered_stamps:
+        pose = pose_map.get(stamp)
+        scan = scan_by_stamp.get(stamp)
+        if pose is None or scan is None:
+            continue
+        pose_graph_nodes.append(
+            GraphNode(
+                stamp=stamp,
+                pose=pose,
+                scan=scan,
+            )
+        )
+
+    return pose_graph_nodes
+
+
 
 def align_ground_truth_trajectory(
     pose_map: Dict[float, Pose2D],
@@ -555,6 +674,45 @@ def align_ground_truth_trajectory(
 
     return segments
 
+def align_pose_graph_to_odom_trajectory(
+    pose_graph_map: Sequence[GraphNode],
+    odom_by_stamp: Dict[float, Pose2D],
+) -> Sequence[GraphNode]:
+    """Align pose-graph nodes to the odometry frame.
+
+    The aligned sequence preserves the relative pose-graph motion while using
+    the odometry pose of the first common timestamp as origin.
+
+    Args:
+        pose_graph_map: Pose-graph nodes with poses expressed in the relations frame.
+        odom_by_stamp:  A dictionary mapping timestamps to their corresponding
+                        2D poses in the odometry frame.
+
+    Returns:
+        A sequence of graph nodes whose poses are expressed in the odometry
+        frame. Nodes without a matching odometry pose are skipped.
+    """
+    aligned_nodes: List[GraphNode] = []
+    valid_nodes = [node for node in pose_graph_map if node.stamp in odom_by_stamp]
+    if not valid_nodes:
+        return aligned_nodes
+
+    first_node = valid_nodes[0]
+    graph_origin = first_node.pose
+    odom_origin = odom_by_stamp[first_node.stamp]
+
+    for node in valid_nodes:
+        rel_from_graph_origin = between_pose(graph_origin, node.pose)
+        aligned_nodes.append(
+            GraphNode(
+                stamp=node.stamp,
+                pose=compose_pose(odom_origin, rel_from_graph_origin),
+                scan=node.scan,
+            )
+        )
+
+    return aligned_nodes
+
 
 def split_ground_truth_by_component(
     pose_map: Dict[float, Pose2D],
@@ -581,6 +739,12 @@ def split_ground_truth_by_component(
         segments.append([pose_map[stamp] for stamp in component_stamps])
     return segments
 
+
+def from_graph_nodes_to_trajectory(
+    nodes: Sequence[GraphNode],
+) -> List[Pose2D]:
+    """Extract a trajectory from a sequence of graph nodes."""
+    return [node.pose for node in nodes]
 
 def save_plot(
     occupancy_probability: np.ndarray,
@@ -744,7 +908,7 @@ def main() -> None:
 
     # Compute robot path from (ground truth) from sequentially connected relation edges
     relation_pose_map: Dict[float, Pose2D] = {} # [stamp: pose]
-    relation_node_id_map: Dict[float, int] = {} # [stamp: node_id]
+    relation_segment_id_map: Dict[float, int] = {} # [stamp: segment_id]
     relation_stamps: List[float] = [] # Sorted list of all timestamps
     if args.relations_log is not None:
         # Extract valid edges
@@ -754,7 +918,8 @@ def main() -> None:
             {edge.src_stamp for edge in relation_edges}
             | {edge.dst_stamp for edge in relation_edges}
         )
-        relation_pose_map, relation_node_id_map = build_ground_truth_pose_map(relation_edges)
+        relation_pose_map, relation_segment_id_map = build_ground_truth_pose_map(relation_edges,
+                                                                                 relation_stamps)
 
     # Filter scans based on relation stamps, downsampling step and max nb of scans.
     selected_scans = determine_scan_subset(
@@ -766,11 +931,48 @@ def main() -> None:
     )
     if not selected_scans:
         raise RuntimeError("No scans selected for mapping after filters.")
+    
+
+    # Extract the largest trajectory
+    main_pose_map = extract_largest_trajectory(relation_pose_map, relation_segment_id_map)
+    # Build pose graph map for the largest trajectory
+    pose_graph_map = build_pose_graph_map(main_pose_map, selected_scans, relation_stamps)
 
     # Build occupancy grid from selected scans and poses.
     # Get map dimensions
-    occupancy_probability, map_extent = build_occupancy_grid(
-        scans=selected_scans,
+    # occupancy_probability, map_extent = build_occupancy_grid(
+    #     scans=selected_scans,
+    #     resolution=args.resolution,
+    #     max_range=args.max_range,
+    #     beam_step=args.beam_step,
+    #     prob_occ=args.prob_occ,
+    #     prob_free=args.prob_free,
+    #     log_odds_clip=args.log_odds_clip,
+    #     padding=args.padding,
+    # )
+
+    # Generate ground-truth trajectory segments from relation edges and poses.
+    odom_traj = [scan.pose for scan in selected_scans]
+    gt_segments: List[List[Pose2D]] = [] # GT may contain disconnected segments
+    final_gt_pose_graph_map: List[GraphNode] = [] # GT pose graph nodes
+    if relation_pose_map:
+        if args.no_align_ground_truth:
+            gt_segments = split_ground_truth_by_component(
+                relation_pose_map,
+                relation_segment_id_map,
+            )
+        else:
+            odom_by_stamp = {scan.stamp: scan.pose for scan in selected_scans}
+            gt_segments = align_ground_truth_trajectory(
+                relation_pose_map,
+                relation_segment_id_map,
+                odom_by_stamp,
+            )
+            final_gt_pose_graph_map = align_pose_graph_to_odom_trajectory(pose_graph_map,
+                                                                          odom_by_stamp)
+
+    occupancy_probability, map_extent = build_occupancy_grid_map(
+        final_gt_pose_graph_map,
         resolution=args.resolution,
         max_range=args.max_range,
         beam_step=args.beam_step,
@@ -780,30 +982,13 @@ def main() -> None:
         padding=args.padding,
     )
 
-    # Generate ground-truth trajectory segments from relation edges and poses.
-    odom_traj = [scan.pose for scan in selected_scans]
-    gt_segments: List[List[Pose2D]] = [] # GT may contain disconnected segments
-    if relation_pose_map:
-        if args.no_align_ground_truth:
-            gt_segments = split_ground_truth_by_component(
-                relation_pose_map,
-                relation_node_id_map,
-            )
-        else:
-            odom_by_stamp = {scan.stamp: scan.pose for scan in selected_scans}
-            gt_segments = align_ground_truth_trajectory(
-                relation_pose_map,
-                relation_node_id_map,
-                odom_by_stamp,
-            )
-
-    print(f"gt_segments: {len(gt_segments)}, odom_traj: {len(odom_traj)}")
-    for idx, segment in enumerate(gt_segments):
-        print(f"  Segment {idx}: {len(segment)} poses, from {segment[0]} to {segment[-1]}")
-
     # Generate output map
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    save_plot(occupancy_probability, map_extent, odom_traj, gt_segments, args.output)
+    save_plot(occupancy_probability,
+              map_extent,
+              odom_traj,
+              [from_graph_nodes_to_trajectory(final_gt_pose_graph_map)],
+              args.output)
 
     print(f"Loaded scans: {len(scans)}")
     print(f"Scans used for mapping: {len(selected_scans)}")
