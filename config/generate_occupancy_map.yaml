@@ -1,0 +1,26 @@
+# Configuration file for generate_occupancy_map.py.
+#
+# Launch example:
+#   python3 generate_occupancy_map.py /path/to/generate_occupancy_map.yaml
+#
+# All runtime parameters are loaded from this file.
+
+# Path to raw CARMEN log (.log/.clf).
+raw_log: "/home/matheus/data/datasets/intel_research_lab_seatle/freiburg/intel_research_lab_raw.log"
+# Path to relations log with ground-truth constraints.
+# Set to empty to disable relations-based trajectory reconstruction.
+relations_log: "/home/matheus/data/datasets/intel_research_lab_seatle/freiburg/relations.log"
+# Output image path.
+output: "~/Downloads/intel_map_full_111.png"
+
+resolution: 0.05    # Grid resolution in meters.
+max_range: 10.0     # Maximum lidar range used for mapping in meters.
+beam_step: 1        # Use every Nth beam for mapping.
+scan_step: 1        # Use every Nth scan after initial filtering.
+max_scans: 0        # Maximum number of scans to use (0 for no limit).
+all_scans: false    # Use all raw scans for mapping, even if relations are given.
+prob_occ: 0.7       # Occupied-cell inverse-model probability.
+prob_free: 0.4      # Free-cell inverse-model probability.
+log_odds_clip: 10.0 # Saturation value for log-odds updates.
+padding: 1.0        # Extra map padding in meters around trajectory and endpoints.
+no_align_ground_truth: false  # Do not align odom and ground-truth trajectories.
